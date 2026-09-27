@@ -1,4 +1,14 @@
 (() => {
+const API_BASE_URL = 'https://voice-pulse-backend.onrender.com/api';
+const LANDING_PAGE_URL = 'https://voice-pusle-frontend.vercel.app';
+const urlDeviceToken = new URLSearchParams(window.location.search).get('deviceToken');
+if (urlDeviceToken) localStorage.setItem('deviceToken', urlDeviceToken);
+const deviceToken = urlDeviceToken || localStorage.getItem('deviceToken');
+if (!deviceToken) {
+  window.location.href = LANDING_PAGE_URL;
+  return;
+}
+const profileApiUrl = `${API_BASE_URL}/users/device/${encodeURIComponent(deviceToken)}`;
 const sidebar = document.querySelector('.profile-sidebar');
 const navbarToggle = document.querySelector('#navbar-toggle');
 const navbarNavigation = document.querySelector('#navbar-navigation');
@@ -28,14 +38,50 @@ const profileFields = document.querySelector('#profile-fields');
 const profileAction = document.querySelector('#profile-edit-button');
 
 const profileData = [
-  { key: 'name', label: 'Name', value: 'Rahul Sharma', type: 'text' },
-  { key: 'phone', label: 'Phone Number', value: '+91 98765 43210', type: 'tel' },
-  { key: 'gender', label: 'Gender', value: 'Male', type: 'select' },
-  { key: 'dateOfBirth', label: 'Date of Birth', value: '2004-03-15', type: 'date' },
-  { key: 'address', label: 'Address', value: 'Mumbai, Maharashtra, India', type: 'textarea' },
+  { key: 'name', label: 'Name', value: '', type: 'text' },
+  { key: 'phone', label: 'Phone Number', value: '', type: 'tel' },
+  { key: 'gender', label: 'Gender', value: '', type: 'select' },
+  { key: 'dateOfBirth', label: 'Date of Birth', value: '', type: 'date' },
+  { key: 'address', label: 'Address', value: '', type: 'textarea' },
 ];
 const genderOptions = ['Male', 'Female', 'Other', 'Prefer not to say'];
 let editingProfile = false;
+
+const profileStatus = document.createElement('p');
+profileStatus.className = 'profile-status';
+profileStatus.setAttribute('role', 'status');
+profileStatus.setAttribute('aria-live', 'polite');
+if (profileForm) profileForm.append(profileStatus);
+
+function setProfileStatus(message, isError = false) {
+  profileStatus.textContent = message;
+  profileStatus.dataset.error = String(isError);
+}
+
+async function loadProfile() {
+  if (!profileForm) return;
+  setProfileStatus('Loading profile…');
+  try {
+    const response = await fetch(profileApiUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('Profile request failed (' + response.status + ').');
+    const payload = await response.json();
+    const user = payload.user || payload.data || payload;
+    profileData.forEach((field) => {
+      const value = field.key === 'dateOfBirth'
+        ? (user.dateOfBirth ?? user.date_of_birth ?? user.dob)
+        : field.key === 'phone'
+          ? (user.phone ?? user.phoneNumber ?? user.phone_number)
+          : user[field.key];
+      if (value !== undefined && value !== null) {
+        field.value = field.type === 'date' ? String(value).slice(0, 10) : String(value);
+      }
+    });
+    renderProfile();
+    setProfileStatus('');
+  } catch (error) {
+    setProfileStatus('Could not load profile: ' + error.message, true);
+  }
+}
 
 function formatDate(value) {
   if (!value) return '';
@@ -117,6 +163,7 @@ function showValidationError(field, message) {
 
 if (profileView && profileForm && profileFields && profileAction) {
   renderProfile();
+  loadProfile();
   profileAction.addEventListener('click', () => {
     if (editingProfile) {
       profileForm.requestSubmit();
@@ -127,7 +174,7 @@ if (profileView && profileForm && profileFields && profileAction) {
     profileFields.querySelector('input, select, textarea')?.focus();
   });
 
-  profileForm.addEventListener('submit', (event) => {
+  profileForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const controls = new Map();
     let firstInvalid = null;
@@ -136,9 +183,7 @@ if (profileView && profileForm && profileFields && profileAction) {
       const control = profileForm.elements.namedItem(field.key);
       controls.set(field.key, control);
       const value = control.value.trim();
-      let error = '';
-
-      if (!value) error = `${field.label} cannot be empty.`;
+      const error = value ? '' : field.label + ' cannot be empty.';
       showValidationError(field, error);
       if (error && !firstInvalid) firstInvalid = control;
     });
@@ -148,11 +193,36 @@ if (profileView && profileForm && profileFields && profileAction) {
       return;
     }
 
-    profileData.forEach((field) => {
-      profileData.find((item) => item.key === field.key).value = controls.get(field.key).value.trim();
-    });
-    editingProfile = false;
-    renderProfile();
+    const saveButton = profileForm.querySelector('[type="submit"]');
+    const originalButtonText = saveButton ? saveButton.textContent : '';
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.textContent = 'Saving…';
+    }
+    setProfileStatus('Saving profile…');
+    const updatedProfile = Object.fromEntries(profileData.map((field) => [
+      field.key,
+      controls.get(field.key).value.trim(),
+    ]));
+
+    try {
+      const response = await fetch(profileApiUrl, {
+        method: 'PUT',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedProfile),
+      });
+      if (!response.ok) throw new Error('Profile save failed (' + response.status + ').');
+      profileData.forEach((field) => { field.value = updatedProfile[field.key]; });
+      editingProfile = false;
+      renderProfile();
+      setProfileStatus('Profile saved.');
+    } catch (error) {
+      setProfileStatus('Could not save profile: ' + error.message, true);
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = originalButtonText;
+      }
+    }
   });
 }
 
